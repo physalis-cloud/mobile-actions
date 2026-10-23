@@ -4,8 +4,9 @@ set -euo pipefail
 # shellcheck source=../lib/common.sh
 . "$GITHUB_ACTION_PATH/../lib/common.sh"
 
-[ -n "${PHYSALIS_CRED_DIR:-}" ] && [ -n "${KEYSTORE_PATH:-}" ] \
-  || die "Materiel Android absent : appelez physalis-cloud/mobile-actions/credentials (platform: android) avant android-release"
+if [ -z "${PHYSALIS_CRED_DIR:-}" ] || [ -z "${KEYSTORE_PATH:-}" ]; then
+  die "Materiel Android absent : appelez physalis-cloud/mobile-actions/credentials (platform: android) avant android-release"
+fi
 
 # Refait ici au cas ou credentials n'avait pas de keytool sous la main ; sans
 # cout si c'etait deja fait (une seconde).

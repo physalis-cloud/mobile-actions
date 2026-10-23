@@ -4,8 +4,9 @@ set -euo pipefail
 # shellcheck source=../lib/common.sh
 . "$GITHUB_ACTION_PATH/../lib/common.sh"
 
-[ -n "${PHYSALIS_CRED_DIR:-}" ] && [ -n "${P12_PATH:-}" ] \
-  || die "Materiel iOS absent : appelez physalis-cloud/mobile-actions/credentials (platform: ios) avant ios-release"
+if [ -z "${PHYSALIS_CRED_DIR:-}" ] || [ -z "${P12_PATH:-}" ]; then
+  die "Materiel iOS absent : appelez physalis-cloud/mobile-actions/credentials (platform: ios) avant ios-release"
+fi
 
 # L'image livre plusieurs Xcode et ne selectionne pas forcement le plus recent.
 # On VERIFIE ensuite le SDK : sans ce controle, le rejet d'Apple n'arrive qu'a
