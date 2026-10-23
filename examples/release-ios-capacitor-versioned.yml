@@ -1,0 +1,50 @@
+# .github/workflows/release-ios.yml — app Capacitor, dossier ios/ VERSIONNE.
+#
+# Le projet natif est dans le depot (personnalisations, App.entitlements,
+# GoogleService-Info.plist...) : `cap sync` suffit, rien a re-poser a chaque
+# run. C'est le mode le plus simple des qu'on touche au natif.
+#
+# Cote Physalis : app iOS avec son materiel, et DEUX policies sur
+# (depot, release-ios.yml, production) — une serveur (VITE_*), une mobile.
+name: Release iOS
+
+on:
+  workflow_dispatch:
+
+permissions:
+  id-token: write   # jeton OIDC presente a Physalis — aucun secret GitHub
+  contents: read
+
+jobs:
+  release:
+    runs-on: macos-latest   # SDK iOS 26 exige par App Store Connect
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      # Avant tout build : un materiel incomplet echoue ici, en secondes.
+      - uses: physalis-cloud/mobile-actions/credentials@v1
+        with:
+          app: com.exemple.monapp
+          platform: ios
+
+      - uses: physalis-cloud/mobile-actions/env@v1
+        with:
+          project: mon-projet
+          output: .env.production
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+      - run: npm ci && npm run build && npx cap sync ios
+
+      - uses: physalis-cloud/mobile-actions/ios-release@v1
+        with:
+          scheme: App
+          project-dir: ios/App
+          version: pbxproj        # Info.plist en $(CURRENT_PROJECT_VERSION)
+          expect-push: "true"     # l'app recoit des notifications push
+
+      - uses: physalis-cloud/mobile-actions/report@v1
+        if: always()

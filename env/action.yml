@@ -1,0 +1,49 @@
+name: Physalis — variables de build
+description: >
+  Ecrit les variables d'un environnement Physalis (par defaut les VITE_*) dans
+  un fichier .env, pour le build web d'une app hybride. Aucun secret GitHub.
+author: Physalis
+
+inputs:
+  project:
+    description: Slug du projet Physalis
+    required: true
+  environment:
+    description: Environnement Physalis (production, staging...)
+    required: false
+    default: production
+  output:
+    description: Fichier a ecrire (relatif au depot). Vite charge .env.production en mode production.
+    required: false
+    default: frontend/.env.production
+  prefix:
+    description: Seules les variables dont le nom commence par ce prefixe sont ecrites. Vide = toutes.
+    required: false
+    default: VITE_
+  physalis-url:
+    description: URL de l'instance Physalis
+    required: false
+    default: https://vault.physalis.cloud
+  audience:
+    description: Audience OIDC attendue par l'instance (defaut = hote de physalis-url)
+    required: false
+    default: ""
+
+outputs:
+  count:
+    description: Nombre de variables ecrites
+    value: ${{ steps.fetch.outputs.count }}
+
+runs:
+  using: composite
+  steps:
+    - id: fetch
+      shell: bash
+      env:
+        PHYSALIS_URL: ${{ inputs.physalis-url }}
+        PHYSALIS_AUDIENCE_IN: ${{ inputs.audience }}
+        IN_PROJECT: ${{ inputs.project }}
+        IN_ENV: ${{ inputs.environment }}
+        IN_OUTPUT: ${{ inputs.output }}
+        IN_PREFIX: ${{ inputs.prefix }}
+      run: bash "$GITHUB_ACTION_PATH/fetch.sh"

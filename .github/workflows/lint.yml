@@ -1,0 +1,30 @@
+name: Lint
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: shellcheck
+        run: shellcheck -x lib/*.sh env/*.sh credentials/*.sh ios-release/*.sh android-release/*.sh report/*.sh
+
+      - name: Syntaxe des Fastfile
+        run: |
+          ruby -c ios-release/fastlane/Fastfile
+          ruby -c android-release/fastlane/Fastfile
+
+      # Les exemples sont des workflows complets : actionlint les relit comme
+      # tels (expressions, inputs, permissions).
+      - name: actionlint (exemples)
+        run: |
+          bash <(curl -sSfL https://raw.githubusercontent.com/rhysd/actionlint/v1.7.7/scripts/download-actionlint.bash) 1.7.7
+          ./actionlint -shellcheck= examples/*.yml .github/workflows/*.yml

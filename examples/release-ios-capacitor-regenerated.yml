@@ -1,0 +1,76 @@
+# .github/workflows/release-ios.yml — app Capacitor, ios/ REGENERE a chaque run.
+#
+# `ios/` est gitignore : tout ce qui le personnalise (Info.plist, icones,
+# cible de deploiement, entitlements) doit etre re-applique ici a chaque build.
+# Des que ces personnalisations s'accumulent, versionner ios/ est plus simple
+# (cf. release-ios-capacitor-versioned.yml).
+name: Release iOS
+
+on:
+  workflow_dispatch:
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  release:
+    runs-on: macos-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: physalis-cloud/mobile-actions/credentials@v1
+        with:
+          app: com.exemple.monapp
+          platform: ios
+
+      - uses: physalis-cloud/mobile-actions/env@v1
+        with:
+          project: mon-projet
+          output: frontend/.env.production
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Build web + projet natif
+        working-directory: frontend
+        run: |
+          set -euo pipefail
+          npm ci
+          npm run build
+          # CocoaPods et non SPM : Capacitor 8 genere un projet SPM par defaut,
+          # dans lequel certains plugins (push-notifications) ne compilent pas.
+          npx cap add ios --packagemanager CocoaPods || true
+          npx cap sync ios
+
+      # ── Personnalisations propres a l'app, a re-poser a chaque run ─────────
+      - name: Personnaliser le projet natif
+        working-directory: frontend/ios/App
+        run: |
+          set -euo pipefail
+          plutil -replace CFBundleDisplayName -string "Mon App" App/Info.plist
+          plutil -replace ITSAppUsesNonExemptEncryption -bool false App/Info.plist
+          # Push : `cap add` ne cree AUCUN App.entitlements. Sans lui, le build
+          # passe et les notifications n'arrivent jamais (expect-push le
+          # detecte avant l'upload).
+          cp "$GITHUB_WORKSPACE/native/App.entitlements" App/App.entitlements
+          cp "$GITHUB_WORKSPACE/native/GoogleService-Info.plist" App/
+          # Reglage pose UNIQUEMENT sur les configurations du target App
+          # (celles qui designent App/Info.plist), puis relu.
+          sed -i '' 's#\([[:space:]]*\)INFOPLIST_FILE = App/Info.plist;#&\1CODE_SIGN_ENTITLEMENTS = App/App.entitlements;#' \
+            App.xcodeproj/project.pbxproj
+          grep -q "CODE_SIGN_ENTITLEMENTS = App/App.entitlements;" App.xcodeproj/project.pbxproj
+
+      - uses: physalis-cloud/mobile-actions/ios-release@v1
+        with:
+          scheme: App
+          project-dir: frontend/ios/App
+          version: info-plist
+          expect-push: "true"
+
+      - uses: physalis-cloud/mobile-actions/report@v1
+        if: always()

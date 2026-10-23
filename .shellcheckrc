@@ -1,0 +1,4 @@
+# Les `source=../lib/common.sh` se resolvent depuis le dossier du script.
+source-path=SCRIPTDIR
+# Les IN_* arrivent par l'`env:` des action.yml, invisibles de shellcheck.
+disable=SC2153

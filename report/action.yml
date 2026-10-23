@@ -1,0 +1,32 @@
+name: Physalis — rapport de livraison et nettoyage
+description: >
+  Signale a Physalis l'issue de la publication (registre de livraisons) puis
+  efface du runner le materiel de signature et les fichiers de variables.
+  A appeler avec `if: always()`.
+author: Physalis
+
+inputs:
+  status:
+    description: >
+      Statut a rapporter. Vide (defaut) = deduit : `uploaded` si l'action de
+      publication a abouti, `failed` sinon.
+    required: false
+    default: ""
+  track:
+    description: Piste a rapporter. Vide (defaut) = celle de l'action de publication.
+    required: false
+    default: ""
+  detail:
+    description: Libelle libre joint au rapport (defaut = workflow et numero de run)
+    required: false
+    default: ""
+
+runs:
+  using: composite
+  steps:
+    - shell: bash
+      env:
+        IN_STATUS: ${{ inputs.status }}
+        IN_TRACK: ${{ inputs.track }}
+        IN_DETAIL: ${{ inputs.detail }}
+      run: bash "$GITHUB_ACTION_PATH/report.sh"

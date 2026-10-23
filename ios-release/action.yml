@@ -1,0 +1,76 @@
+name: Physalis — build signe et publication iOS
+description: >
+  Signe, archive et televerse l'app iOS sur TestFlight ou l'App Store, avec le
+  materiel servi par l'action credentials. Controle les entitlements push du
+  binaire signe AVANT l'upload.
+author: Physalis
+
+inputs:
+  scheme:
+    description: Scheme Xcode a archiver (`App` pour Capacitor)
+    required: true
+  project-dir:
+    description: Dossier contenant le .xcodeproj (et le .xcworkspace s'il existe), relatif au depot
+    required: false
+    default: ios/App
+  version:
+    description: >
+      Comment poser BUILD_NUMBER / VERSION_NAME servis par Physalis :
+      `info-plist` (Info.plist a valeurs litterales, ios/ Capacitor regenere),
+      `pbxproj` (Info.plist en $(CURRENT_PROJECT_VERSION) : build settings
+      ecrits dans le .xcodeproj, ios/ versionne),
+      `agvtool` (projet Xcode natif en versioning Apple Generic),
+      `none` (le workflow s'en est charge).
+    required: false
+    default: info-plist
+  info-plist:
+    description: Info.plist a modifier quand version = info-plist (defaut <project-dir>/App/Info.plist)
+    required: false
+    default: ""
+  expect-push:
+    description: "true si l'app recoit des notifications push : echec si le binaire signe ne porte pas aps-environment=production"
+    required: false
+    default: "false"
+  destination:
+    description: testflight | appstore | none (build signe sans upload)
+    required: false
+    default: testflight
+  min-sdk:
+    description: SDK iOS minimal exige par App Store Connect (verifie avant le build)
+    required: false
+    default: "26"
+  select-xcode:
+    description: "true = selectionne le Xcode le plus recent du runner"
+    required: false
+    default: "true"
+
+outputs:
+  ipa-path:
+    description: Chemin de l'.ipa produit
+    value: ${{ steps.release.outputs.ipa-path }}
+
+runs:
+  using: composite
+  steps:
+    - shell: bash
+      env:
+        IN_MIN_SDK: ${{ inputs.min-sdk }}
+        IN_SELECT_XCODE: ${{ inputs.select-xcode }}
+      run: bash "$GITHUB_ACTION_PATH/prepare.sh"
+
+    - shell: bash
+      env:
+        IN_PROJECT_DIR: ${{ inputs.project-dir }}
+        IN_VERSION: ${{ inputs.version }}
+        IN_INFO_PLIST: ${{ inputs.info-plist }}
+      run: bash "$GITHUB_ACTION_PATH/version.sh"
+
+    - id: release
+      shell: bash
+      env:
+        IN_SCHEME: ${{ inputs.scheme }}
+        IN_EXPECT_PUSH: ${{ inputs.expect-push }}
+        IN_DESTINATION: ${{ inputs.destination }}
+        FASTLANE_SKIP_UPDATE_CHECK: "1"
+        FASTLANE_HIDE_CHANGELOG: "1"
+      run: bash "$GITHUB_ACTION_PATH/release.sh"

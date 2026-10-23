@@ -1,0 +1,291 @@
+# Lane iOS embarquee par l'action physalis-cloud/mobile-actions/ios-release.
+#
+# Lancee par release.sh depuis le dossier de l'action ; tous les chemins
+# qu'elle recoit sont ABSOLUS. Ne stocke AUCUN secret : tout arrive par les
+# variables d'environnement posees par l'action credentials.
+#
+# Issue du gabarit fastlane.Fastfile.modele de Physalis, qui a publie sur
+# TestFlight pour de vrai. Les commentaires qui racontent un piege sont
+# conserves : chacun correspond a un run qui a echoue.
+
+require "open3"
+require "securerandom"
+require "shellwords"
+require "tmpdir"
+
+default_platform(:ios)
+
+# Lit une cle d'un plist XML par plutil. nil si la cle est absente — plutil
+# rend alors un code non nul, ce n'est pas une erreur ici.
+def plist_value(plist_path, key_path)
+  out, status = Open3.capture2e("plutil", "-extract", key_path, "raw", "-o", "-", plist_path)
+  status.success? ? out.strip : nil
+end
+
+# Notifications push : compare l'entitlement `aps-environment` du PROFIL et
+# celui que porte reellement le binaire SIGNE.
+#
+# Le cas vise est silencieux : le profil autorise le push (capacite cochee sur
+# l'App ID), mais l'app n'embarque pas d'App.entitlements qui le demande —
+# typiquement un `ios/` regenere par `npx cap add`, qui n'en cree aucun. Le
+# build passe, l'upload passe, la revue passe, et l'app ne recoit jamais de
+# notification. Seule la signature du .app tranche, d'ou le controle sur l'IPA
+# plutot que sur le projet.
+#
+# IOS_EXPECT_PUSH=1 fait de l'absence un ECHEC (l'app envoie des push, elle
+# doit les avoir). Sans lui, un simple avertissement : un profil peut autoriser
+# le push pour une app qui ne s'en sert pas.
+def verify_push_entitlement(ipa_path, profile_path)
+  UI.user_error!("IPA introuvable apres build_app : #{ipa_path.inspect}") unless File.file?(ipa_path.to_s)
+  expect_push = ENV["IOS_EXPECT_PUSH"].to_s == "1"
+
+  Dir.mktmpdir("push-check") do |dir|
+    profile_plist = File.join(dir, "profile.plist")
+    out, status = Open3.capture2e("security", "cms", "-D", "-i", profile_path, "-o", profile_plist)
+    UI.user_error!("Profil illisible par security cms : #{out}") unless status.success?
+    profile_aps = plist_value(profile_plist, "Entitlements.aps-environment")
+
+    out, status = Open3.capture2e("unzip", "-q", ipa_path, "Payload/*", "-d", dir)
+    UI.user_error!("IPA illisible : #{out}") unless status.success?
+    app = Dir.glob(File.join(dir, "Payload", "*.app")).first
+    UI.user_error!("Aucun .app dans #{ipa_path}") unless app
+
+    # `--entitlements - --xml` : forme moderne (macOS 12+), sortie XML sur
+    # stdout. stderr est separe, codesign y ecrit « Executable=... ».
+    ent_xml, err, status = Open3.capture3("codesign", "-d", "--entitlements", "-", "--xml", app)
+    UI.user_error!("codesign n'a pas lu les entitlements du .app : #{err}") unless status.success?
+    app_plist = File.join(dir, "app-entitlements.plist")
+    File.write(app_plist, ent_xml)
+    app_aps = plist_value(app_plist, "aps-environment")
+
+    UI.message("aps-environment — profil : #{profile_aps || '(absent)'} ; binaire signe : #{app_aps || '(absent)'}")
+
+    if app_aps && app_aps != "production"
+      # Un build App Store en bac a sable : APNs refusera ses jetons.
+      UI.user_error!("Le binaire est signe avec aps-environment=#{app_aps} : un build App Store doit porter « production ».")
+    elsif app_aps.nil? && expect_push
+      if profile_aps
+        UI.user_error!(
+          "IOS_EXPECT_PUSH=1 mais le binaire n'a PAS l'entitlement aps-environment, alors que le " \
+          "profil l'autorise : l'app ne declare pas le push. Ajoutez un App.entitlements " \
+          "(aps-environment = production) reference par CODE_SIGN_ENTITLEMENTS du target.",
+        )
+      else
+        UI.user_error!(
+          "IOS_EXPECT_PUSH=1 mais ni le profil ni le binaire n'autorisent le push : cochez la " \
+          "capacite Push Notifications sur l'App ID, regenerez le profil dans Physalis, et " \
+          "declarez aps-environment dans l'App.entitlements du target.",
+        )
+      end
+    elsif app_aps.nil? && profile_aps
+      UI.important(
+        "Le profil autorise le push mais le binaire ne le declare pas : si cette app attend des " \
+        "notifications, elles n'arriveront jamais. Posez IOS_EXPECT_PUSH=1 pour en faire un echec.",
+      )
+    end
+  end
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+platform :ios do
+  # Variables attendues (posees par les actions credentials et ios-release) :
+  #   P12_PATH        chemin du certificat de distribution .p12
+  #   P12_PASSWORD    mot de passe du .p12
+  #   PROFILE_PATH    chemin du profil .mobileprovision
+  #   PROFILE_NAME    nom du profil, extrait du .mobileprovision par le workflow
+  #   TEAM_ID         Team ID, extrait du .mobileprovision par le workflow
+  #   ASC_KEY_PATH    chemin de la cle d'API App Store Connect .p8
+  #   ASC_KEY_ID      Key ID App Store Connect
+  #   ASC_ISSUER_ID   Issuer ID App Store Connect
+  #   MOBILE_APP      bundle id (com.exemple.monapp)
+  #   IOS_SCHEME      scheme Xcode (`App` avec Capacitor, celui du projet en natif)
+  #   IOS_WORKSPACE   .xcworkspace  ┐ l'UN ou l'AUTRE, pose par le workflow selon
+  #   IOS_PROJECT     .xcodeproj    ┘ ce que le projet expose (SPM, pods, natif)
+  #   IOS_XCODEPROJ   .xcodeproj ou inscrire la signature manuelle
+  #   IOS_EXPECT_PUSH "1" si l'app recoit des notifications push (optionnel)
+  #   IOS_OUTPUT_DIR  dossier ou deposer l'.ipa (absolu)
+  #   IOS_DESTINATION testflight | appstore | none
+
+  desc "Build, signe et televerse sur App Store Connect (TestFlight)"
+  lane :release do
+    bundle_id    = ENV.fetch("MOBILE_APP")
+    profile_name = ENV.fetch("PROFILE_NAME")
+    team_id      = ENV.fetch("TEAM_ID")
+
+    # Capacitor 8 genere un projet SPM : selon les plugins installes, il peut ne
+    # pas y avoir de workspace CocoaPods. Le workflow a detecte lequel existe.
+    workspace = ENV["IOS_WORKSPACE"].to_s
+    project   = ENV["IOS_PROJECT"].to_s
+    if workspace.empty? && project.empty?
+      UI.user_error!("Ni IOS_WORKSPACE ni IOS_PROJECT n'est defini")
+    end
+
+    # ── Authentification App Store Connect par cle d'API (.p8) ──────────────
+    # Pas d'Apple ID, pas de 2FA : la cle d'API suffit pour deliver/pilot.
+    api_key = app_store_connect_api_key(
+      key_id: ENV.fetch("ASC_KEY_ID"),
+      issuer_id: ENV.fetch("ASC_ISSUER_ID"),
+      key_filepath: ENV.fetch("ASC_KEY_PATH"),
+      in_house: false,
+    )
+
+    # ── Keychain temporaire, detruit en fin de lane ────────────────────────
+    keychain_name = "physalis-ci.keychain"
+    keychain_password = SecureRandom.hex(16)
+    create_keychain(
+      name: keychain_name,
+      password: keychain_password,
+      default_keychain: true,
+      unlock: true,
+      timeout: 3600,
+      lock_when_sleeps: true,
+    )
+
+    begin
+      # Importe le certificat de distribution dans ce keychain. log_output pour
+      # voir la sortie de `security import` : sans elle, un import qui n'a rien
+      # ajoute ressemble a un import reussi.
+      import_certificate(
+        certificate_path: ENV.fetch("P12_PATH"),
+        certificate_password: ENV.fetch("P12_PASSWORD", ""),
+        keychain_name: keychain_name,
+        keychain_password: keychain_password,
+        log_output: true,
+      )
+
+      # Chemin REEL du keychain, et non son nom : `security` interroge sinon un
+      # fichier qui n'existe pas et repond « 0 identities » — indiscernable d'un
+      # import rate. Le tilde est expanse AVANT shellescape, qui l'empecherait
+      # d'etre interprete, et macOS suffixe volontiers le fichier en `-db`.
+      raw_path = lane_context[SharedValues::KEYCHAIN_PATH].to_s
+      keychain_path = raw_path.empty? ? keychain_name : File.expand_path(raw_path)
+      keychain_path = "#{keychain_path}-db" if !File.exist?(keychain_path) && File.exist?("#{keychain_path}-db")
+      UI.message("Keychain interroge : #{keychain_path} (existe : #{File.exist?(keychain_path)})")
+
+      # `import_certificate` reussit meme quand le .p12 ne contient QUE le
+      # certificat, sans sa cle privee — xcodebuild ne s'en apercoit que 30 s
+      # plus tard, sur "No signing certificate ... with a private key was
+      # found", qui ne dit pas ou est le vrai probleme. On verifie donc tout de
+      # suite que le keychain expose une identite de signature complete.
+      # Quatre vues, parce qu'aucune ne suffit seule :
+      #   - sans -v : TOUTES les identites ; avec -v : les VALIDES. L'ecart
+      #     separe « rien d'importe » de « importe mais invalide » (chaine WWDR).
+      #   - dans le keychain CI, puis dans toute la search list : si le
+      #     certificat n'apparait que dans la seconde, c'est le keychain qui est
+      #     hors de portee de xcodebuild, pas le certificat qui manque.
+      keychain_arg = keychain_path.shellescape
+      all_identities   = `security find-identity -p codesigning #{keychain_arg} 2>&1`
+      valid_identities = `security find-identity -v -p codesigning #{keychain_arg} 2>&1`
+      valid_anywhere   = `security find-identity -v -p codesigning 2>&1`
+      UI.message("Search list :\n#{`security list-keychains -d user`}")
+      UI.message("Identites du keychain CI (toutes) :\n#{all_identities}")
+      UI.message("Identites VALIDES du keychain CI :\n#{valid_identities}")
+      UI.message("Identites VALIDES, tous keychains :\n#{valid_anywhere}")
+
+      if valid_identities.include?("0 valid identities found")
+        if !valid_anywhere.include?("0 valid identities found")
+          UI.important(
+            "Le certificat n'est pas vu dans le keychain CI mais l'est ailleurs " \
+            "dans la search list : c'est un probleme de ciblage de keychain, pas " \
+            "de materiel. On laisse xcodebuild tenter.",
+          )
+        elsif all_identities.match?(/\b0 identities found/)
+          UI.user_error!(
+            "Aucune identite nulle part apres import. Relisez la sortie de " \
+            "`security import` ci-dessus : `import_certificate` NE FAIT PAS " \
+            "echouer la lane quand elle echoue, elle se contente de l'afficher " \
+            "en rouge. « MAC verification failed (wrong password?) » y designe " \
+            "ios_p12_password ; toute autre erreur designe le fichier lui-meme.",
+          )
+        else
+          UI.user_error!(
+            "Le certificat est dans le keychain, mais AUCUNE identite n'est " \
+            "valide : chaine de certification incomplete (intermediaire Apple " \
+            "WWDR G3 absent) ou certificat expire. Ce n'est PAS la cle privee.",
+          )
+        end
+      end
+
+      # Installe le profil de provisioning fourni par Physalis.
+      install_provisioning_profile(path: ENV.fetch("PROFILE_PATH"))
+
+      # ── Signature MANUELLE, inscrite dans le seul target App ─────────────
+      # Capacitor genere le projet en signature automatique, qui exigerait un
+      # compte Xcode connecte. Le reglage ne peut PAS passer par xcargs : un
+      # build setting en ligne de commande s'applique a TOUS les targets, pods
+      # compris, et l'archive echoue aussitot sur « GoogleToolboxForMac does not
+      # support provisioning profiles ». Une bibliotheque n'a pas de profil.
+      #
+      # update_code_signing_settings ecrit dans le .xcodeproj, pour le target
+      # nomme uniquement — les pods gardent leur signature automatique.
+      update_code_signing_settings(
+        use_automatic_signing: false,
+        path: ENV.fetch("IOS_XCODEPROJ"),
+        team_id: team_id,
+        code_sign_identity: "Apple Distribution",
+        profile_name: profile_name,
+        bundle_identifier: bundle_id,
+        targets: [ENV.fetch("IOS_SCHEME")],
+      )
+
+      # ── Build signe ──────────────────────────────────────────────────────
+      # Aucun xcargs de signature ici : tout est deja dans le projet.
+      build_app(
+        workspace: workspace.empty? ? nil : workspace,
+        project: project.empty? ? nil : project,
+        scheme: ENV.fetch("IOS_SCHEME"),
+        configuration: "Release",
+        export_method: "app-store",
+        output_directory: ENV.fetch("IOS_OUTPUT_DIR"),
+        export_options: {
+          signingStyle: "manual",
+          teamID: team_id,
+          provisioningProfiles: { bundle_id => profile_name },
+          uploadSymbols: true,
+          uploadBitcode: false,
+        },
+      )
+
+      # ── Controle du binaire signe, AVANT l'upload ────────────────────────
+      # Apres l'upload, un build sans push serait deja sur TestFlight, numero
+      # de build consomme.
+      verify_push_entitlement(
+        lane_context[SharedValues::IPA_OUTPUT_PATH].to_s,
+        ENV.fetch("PROFILE_PATH"),
+      )
+
+      # ── Upload ───────────────────────────────────────────────────────────
+      # CFBundleVersion / CFBundleShortVersionString ont deja ete poses par
+      # l'action (plutil pour Capacitor, agvtool pour un projet natif) avec le
+      # buildNumber servi par Physalis. Pas d'increment_build_number ici : y
+      # superposer un increment ferait deriver le numero d'un cran a chaque run.
+      case ENV.fetch("IOS_DESTINATION", "testflight")
+      when "testflight"
+        upload_to_testflight(
+          api_key: api_key,
+          app_identifier: bundle_id,
+          skip_waiting_for_build_processing: true,
+        )
+      when "appstore"
+        # Binaire seul : la fiche, les captures et l'envoi en revue restent une
+        # decision explicite, dans App Store Connect.
+        upload_to_app_store(
+          api_key: api_key,
+          app_identifier: bundle_id,
+          skip_metadata: true,
+          skip_screenshots: true,
+          submit_for_review: false,
+          precheck_include_in_app_purchases: false,
+          force: true,
+        )
+      when "none"
+        UI.message("destination: none — build signe, aucun upload.")
+      else
+        UI.user_error!("IOS_DESTINATION inconnue : #{ENV['IOS_DESTINATION']}")
+      end
+    ensure
+      delete_keychain(name: keychain_name)
+    end
+  end
+end
+

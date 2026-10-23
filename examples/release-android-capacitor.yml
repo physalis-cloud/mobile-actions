@@ -1,0 +1,58 @@
+# .github/workflows/release-android.yml — app Capacitor.
+#
+# Premiere publication d'un package : lancez avec first_release coche. Le
+# premier .aab doit etre signe avec le keystore enregistre dans Physalis — le
+# faire partir par ce pipeline le garantit. Reste ensuite un clic humain, une
+# fois : « Envoyer pour examen » dans la Play Console.
+name: Release Android
+
+on:
+  workflow_dispatch:
+    inputs:
+      track:
+        type: choice
+        options: [internal, alpha, beta, production]
+        default: internal
+      first_release:
+        type: boolean
+        default: false
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: physalis-cloud/mobile-actions/credentials@v1
+        with:
+          app: com.exemple.monapp
+          platform: android
+
+      - uses: physalis-cloud/mobile-actions/env@v1
+        with:
+          project: mon-projet
+          output: .env.production
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"   # requis par Capacitor 8
+      - run: npm ci && npm run build && npx cap sync android
+
+      - uses: physalis-cloud/mobile-actions/android-release@v1
+        with:
+          project-dir: android
+          track: ${{ inputs.track || 'internal' }}
+          first-release: ${{ inputs.first_release || false }}
+
+      - uses: physalis-cloud/mobile-actions/report@v1
+        if: always()

@@ -1,0 +1,84 @@
+# Lane Android embarquee par l'action physalis-cloud/mobile-actions/android-release.
+#
+# Lancee par release.sh depuis le dossier de l'action ; tous les chemins
+# qu'elle recoit sont ABSOLUS. Ne stocke AUCUN secret : tout arrive par les
+# variables d'environnement posees par l'action credentials.
+#
+# Issue du gabarit fastlane.Fastfile.modele de Physalis, qui a publie sur
+# Google Play pour de vrai.
+
+platform :android do
+  # Variables attendues (posees par les actions credentials et android-release) :
+  #   KEYSTORE_PATH      chemin du keystore (JKS/PKCS12)
+  #   KEYSTORE_PASSWORD  mot de passe du keystore
+  #   KEY_ALIAS          alias de la cle de signature
+  #   KEY_PASSWORD       mot de passe de la cle
+  #   PLAY_JSON_PATH     chemin du compte de service Google Play (JSON)
+  #   PLAY_TRACK         piste Play (internal | alpha | beta | production)
+  #   MOBILE_APP         applicationId (com.exemple.monapp)
+  #   BUILD_NUMBER       versionCode autoritatif, servi par Physalis
+  #   VERSION_NAME       version marketing (vide => celle du build.gradle)
+  #   PLAY_FIRST_RELEASE "true" au tout premier envoi d'un package (cf. plus bas)
+  #   ANDROID_PROJECT_DIR dossier du projet gradle (absolu)
+
+  desc "Build signe (AAB) et televerse sur Google Play"
+  lane :release do
+    # ── Build de l'App Bundle signe ────────────────────────────────────────
+    # Les proprietes `android.injected.*` signent ET versionnent sans toucher au
+    # build.gradle genere par Capacitor : rien n'est ecrit dans le depot.
+    # ⚠️ Pas de `android.injected.version.*` ici, contrairement au gabarit
+    # Physalis : sur ce projet, l'AGP les ignore et l'AAB sortait avec le
+    # versionCode 1 du build.gradle, jusqu'au rejet par Google. La version est
+    # donc posee dans build.gradle par le workflow (etape "Set app version"),
+    # qui relit le fichier pour s'assurer que la substitution a mordu.
+    # `project_dir` : pose par l'action (input project-dir), en absolu.
+    gradle(
+      project_dir: ENV.fetch("ANDROID_PROJECT_DIR"),
+      task: "bundle",
+      build_type: "Release",
+      properties: {
+        "android.injected.signing.store.file" => ENV.fetch("KEYSTORE_PATH"),
+        "android.injected.signing.store.password" => ENV.fetch("KEYSTORE_PASSWORD"),
+        "android.injected.signing.key.alias" => ENV.fetch("KEY_ALIAS"),
+        "android.injected.signing.key.password" => ENV.fetch("KEY_PASSWORD"),
+      },
+    )
+
+    # ── Upload vers Google Play ────────────────────────────────────────────
+    # `supply` s'authentifie avec le compte de service fourni par Physalis.
+    #
+    # PREMIERE PUBLICATION d'un package. Ce qui est reellement manuel, c'est la
+    # CREATION DE LA FICHE dans la console : l'API Play travaille sur un
+    # packageName existant, elle n'a aucun endpoint de creation. L'AAB, lui,
+    # monte tres bien par l'API des le premier envoi — a deux conditions, tant
+    # que l'app est en « brouillon » (jamais publiee) :
+    #
+    #   release_status: "draft"        sinon « Only releases with status draft
+    #                                  may be created on draft app »
+    #   changes_not_sent_for_review    sinon « Changes cannot be sent for review
+    #                                  automatically. Please set the query
+    #                                  parameter changesNotSentForReview to true »
+    #
+    # Reste ensuite UN clic humain, une fois : envoyer la premiere release en
+    # revue depuis la console. Tant que l'app est en brouillon, les testeurs ne
+    # recoivent rien, quoi qu'ait fait le pipeline.
+    #
+    # ⚠️ Play App Signing enrole la cle d'upload a partir de la cle qui signe la
+    # PREMIERE release : le premier AAB doit etre signe avec le keystore detenu
+    # par Physalis. Le faire passer par ce pipeline le garantit.
+    first_release = ENV["PLAY_FIRST_RELEASE"].to_s == "true"
+
+    upload_to_play_store(
+      package_name: ENV.fetch("MOBILE_APP"),
+      track: ENV.fetch("PLAY_TRACK", "internal"),
+      json_key: ENV.fetch("PLAY_JSON_PATH"),
+      aab: lane_context[SharedValues::GRADLE_AAB_OUTPUT_PATH],
+      release_status: first_release ? "draft" : "completed",
+      changes_not_sent_for_review: first_release,
+      skip_upload_apk: true,
+      skip_upload_metadata: true,
+      skip_upload_images: true,
+      skip_upload_screenshots: true,
+    )
+  end
+end

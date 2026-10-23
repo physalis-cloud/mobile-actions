@@ -1,0 +1,55 @@
+name: Physalis — build signe et publication Android
+description: >
+  Construit l'AAB signe avec le keystore servi par l'action credentials et le
+  televerse sur une piste Google Play. Rien n'est ecrit dans le depot.
+author: Physalis
+
+inputs:
+  project-dir:
+    description: Dossier du projet gradle (contenant settings.gradle), relatif au depot
+    required: false
+    default: android
+  version:
+    description: >
+      Comment poser BUILD_NUMBER / VERSION_NAME servis par Physalis :
+      `gradle` (substitution dans le build.gradle du module app, relue
+      ensuite), `none` (le workflow s'en est charge).
+    required: false
+    default: gradle
+  gradle-file:
+    description: build.gradle(.kts) du module app quand version = gradle (defaut <project-dir>/app/build.gradle, ou .kts)
+    required: false
+    default: ""
+  track:
+    description: Piste Google Play (internal | alpha | beta | production)
+    required: false
+    default: internal
+  first-release:
+    description: "true au tout premier envoi d'un package encore en brouillon (release draft, non envoyee en revue)"
+    required: false
+    default: "false"
+
+outputs:
+  aab-path:
+    description: Chemin de l'AAB produit
+    value: ${{ steps.release.outputs.aab-path }}
+
+runs:
+  using: composite
+  steps:
+    - shell: bash
+      env:
+        IN_PROJECT_DIR: ${{ inputs.project-dir }}
+        IN_VERSION: ${{ inputs.version }}
+        IN_GRADLE_FILE: ${{ inputs.gradle-file }}
+      run: bash "$GITHUB_ACTION_PATH/prepare.sh"
+
+    - id: release
+      shell: bash
+      env:
+        IN_PROJECT_DIR: ${{ inputs.project-dir }}
+        IN_TRACK: ${{ inputs.track }}
+        IN_FIRST_RELEASE: ${{ inputs.first-release }}
+        FASTLANE_SKIP_UPDATE_CHECK: "1"
+        FASTLANE_HIDE_CHANGELOG: "1"
+      run: bash "$GITHUB_ACTION_PATH/release.sh"
