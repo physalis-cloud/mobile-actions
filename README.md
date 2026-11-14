@@ -80,6 +80,7 @@ réutilisable (`workflow_call`) aurait substitué le sien dans le claim
 |---|---|---|
 | `app` | — | bundleId / applicationId déclaré dans Physalis |
 | `platform` | — | `ios` ou `android` ; un bundle d'une autre plateforme fait échouer |
+| `signing` | `manual` | iOS : `automatic` = seule la clé d'API App Store Connect est servie (voir ci-dessous) |
 | `physalis-url` | `https://vault.physalis.cloud` | instance (self-host : la vôtre) |
 | `audience` | hôte de `physalis-url` | audience OIDC attendue |
 
@@ -108,6 +109,44 @@ Sorties : `build-number`, `version-name` (aussi exposés en `BUILD_NUMBER` /
 > ⚠️ **Le premier `.aab` doit être signé avec le keystore enregistré dans
 > Physalis** : Play App Signing enrôle la clé d'upload sur la première release.
 > Le plus sûr : le laisser partir par ce pipeline avec `first-release: true`.
+
+## Signature automatique (iOS, apps à extensions)
+
+`ios-release` signe à la main avec **un** certificat et **un** profil. Une app
+qui embarque une extension (remplissage automatique, widget, notifications
+enrichies, partage) a besoin d'un profil par cible. Dans ce cas :
+
+- dans Physalis, l'application ne porte que la **clé d'API App Store Connect**
+  (rôle **Admin**, pour que Xcode puisse créer certificat et profils), son
+  identifiant, l'Issuer ID, et le **Team ID** dans « Team ID / éditeur » ;
+- `credentials` avec `signing: automatic` pose `ASC_KEY_PATH`, `ASC_KEY_ID`,
+  `ASC_ISSUER_ID`, `TEAM_ID` et `BUILD_NUMBER` ;
+- le workflow archive et envoie lui-même, `ios-release` n'est pas utilisé :
+
+```yaml
+      - uses: physalis-cloud/mobile-actions/credentials@v1
+        with: { app: com.exemple.monapp, platform: ios, signing: automatic }
+      - run: |
+          xcodebuild archive -project ios/App/App.xcodeproj -scheme App \
+            -configuration Release -destination generic/platform=iOS \
+            -archivePath "$RUNNER_TEMP/App.xcarchive" \
+            -allowProvisioningUpdates \
+            -authenticationKeyPath "$ASC_KEY_PATH" \
+            -authenticationKeyID "$ASC_KEY_ID" \
+            -authenticationKeyIssuerID "$ASC_ISSUER_ID" \
+            DEVELOPMENT_TEAM="$TEAM_ID" CURRENT_PROJECT_VERSION="$BUILD_NUMBER"
+          # puis xcodebuild -exportArchive avec method app-store-connect et
+          # destination upload (mêmes options d'authentification)
+      - uses: physalis-cloud/mobile-actions/report@v1
+        if: always()
+        with:
+          track: testflight
+          status: ${{ job.status == 'success' && 'uploaded' || 'failed' }}
+```
+
+Exemple complet : le dépôt public
+[`physalis-cloud/physalis-mobile`](https://github.com/physalis-cloud/physalis-mobile),
+qui publie l'app Physalis elle-même de cette façon.
 
 ## Notifications push (iOS)
 

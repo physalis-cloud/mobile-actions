@@ -4,6 +4,9 @@ set -euo pipefail
 # shellcheck source=../lib/common.sh
 . "$GITHUB_ACTION_PATH/../lib/common.sh"
 
+if [ "${PHYSALIS_SIGNING:-}" = "automatic" ]; then
+  die "credentials a ete appele avec signing: automatic : ios-release signe a la main (.p12 + profil). En signature automatique, le workflow archive et envoie lui-meme (xcodebuild -allowProvisioningUpdates), cf. README"
+fi
 if [ -z "${PHYSALIS_CRED_DIR:-}" ] || [ -z "${P12_PATH:-}" ]; then
   die "Materiel iOS absent : appelez physalis-cloud/mobile-actions/credentials (platform: ios) avant ios-release"
 fi

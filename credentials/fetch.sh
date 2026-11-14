@@ -17,6 +17,15 @@ case "$IN_PLATFORM" in
   ios|android) ;;
   *) die "platform doit valoir ios ou android, pas « $IN_PLATFORM »" ;;
 esac
+IN_SIGNING="${IN_SIGNING:-manual}"
+case "$IN_SIGNING" in
+  manual) ;;
+  automatic)
+    [ "$IN_PLATFORM" = "ios" ] \
+      || die "signing: automatic n'existe que pour iOS (Android signe toujours avec le keystore)"
+    ;;
+  *) die "signing doit valoir manual ou automatic, pas « $IN_SIGNING »" ;;
+esac
 
 PHYSALIS_AUDIENCE="${PHYSALIS_AUDIENCE_IN:-$(default_audience "$PHYSALIS_URL")}"
 export PHYSALIS_AUDIENCE
@@ -89,7 +98,24 @@ BUILD_NUMBER=$(jq -r '.buildNumber // empty' "$BUNDLE")
 [ -n "$BUILD_NUMBER" ] || die "Physalis n'a pas servi de buildNumber"
 VERSION_NAME=$(jq -r '.versionName // empty' "$BUNDLE")
 
-if [ "$IN_PLATFORM" = "ios" ]; then
+if [ "$IN_PLATFORM" = "ios" ] && [ "$IN_SIGNING" = "automatic" ]; then
+  # Signature automatique : Xcode cree certificat et profils (un par cible, app
+  # ET extensions) a partir de la cle d'API — role Admin requis cote App Store
+  # Connect. Ni .p12 ni profil : s'ils existent dans Physalis, ils sont ignores.
+  require asc_api_key asc_key_id asc_issuer_id
+  VENDOR_TEAM_ID=$(jq -r '.app.vendorTeamId // empty' "$BUNDLE")
+  [ -n "$VENDOR_TEAM_ID" ] \
+    || die "signing: automatic exige le Team ID de l'app (champ « Team ID / éditeur » de l'application, onglet Mobile de Physalis)"
+  get_file asc_api_key "$CRED_DIR/AuthKey.p8"
+  {
+    echo "ASC_KEY_PATH=$CRED_DIR/AuthKey.p8"
+    echo "ASC_KEY_ID=$(get_text asc_key_id)"
+    echo "ASC_ISSUER_ID=$(get_text asc_issuer_id)"
+    echo "VENDOR_TEAM_ID=$VENDOR_TEAM_ID"
+    echo "TEAM_ID=$VENDOR_TEAM_ID"
+    echo "PHYSALIS_SIGNING=automatic"
+  } >> "$GITHUB_ENV"
+elif [ "$IN_PLATFORM" = "ios" ]; then
   # `ios_p12_password` n'est PAS exige : un .p12 sans mot de passe est legitime.
   require ios_p12 ios_profile asc_api_key asc_key_id asc_issuer_id
   get_file ios_p12     "$CRED_DIR/dist.p12"
