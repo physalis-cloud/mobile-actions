@@ -121,6 +121,14 @@ enrichies, partage) a besoin d'un profil par cible. Dans ce cas :
   identifiant, l'Issuer ID, et le **Team ID** dans « Team ID / éditeur » ;
 - `credentials` avec `signing: automatic` pose `ASC_KEY_PATH`, `ASC_KEY_ID`,
   `ASC_ISSUER_ID`, `TEAM_ID` et `BUILD_NUMBER` ;
+- **recommandé** : un certificat de distribution (`.p12` + mot de passe) dans
+  l'application — le bouton « Générer le matériel de signature » de Physalis
+  le fabrique à partir de la seule clé d'API. `credentials` l'importe alors
+  dans un keychain temporaire et l'export signe avec lui. Sans lui, Xcode
+  signe avec le certificat *Cloud Managed* d'Apple, et App Store Connect a
+  rejeté de tels envois (« Invalid Signature. Code failed to satisfy
+  specified code requirement(s) »). Le profil généré avec n'est pas utilisé :
+  Xcode crée les siens, un par cible ;
 - le workflow archive et envoie lui-même, `ios-release` n'est pas utilisé :
 
 ```yaml

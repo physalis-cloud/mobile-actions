@@ -115,6 +115,19 @@ if [ "$IN_PLATFORM" = "ios" ] && [ "$IN_SIGNING" = "automatic" ]; then
     echo "TEAM_ID=$VENDOR_TEAM_ID"
     echo "PHYSALIS_SIGNING=automatic"
   } >> "$GITHUB_ENV"
+  # Certificat de distribution facultatif (bouton « Générer le matériel de
+  # signature » de Physalis) : s'il est la, l'export signe avec lui et non avec
+  # le certificat Cloud Managed, rejete par App Store Connect au premier run
+  # de physalis-mobile. Cf. import-keychain.sh.
+  if [ -n "$(get_text ios_p12)" ]; then
+    get_file ios_p12 "$CRED_DIR/dist.p12"
+    P12_PASSWORD=$(get_text ios_p12_password)
+    [ -n "$P12_PASSWORD" ] && echo "::add-mask::$P12_PASSWORD"
+    P12_PASSWORD="$P12_PASSWORD" CRED_DIR="$CRED_DIR" \
+      bash "$GITHUB_ACTION_PATH/import-keychain.sh"
+  else
+    echo "::warning::Aucun certificat de distribution (.p12) dans Physalis : l'export signera avec le certificat Cloud Managed d'Apple, que App Store Connect peut rejeter (« Invalid Signature »). Générez le matériel de signature dans l'onglet Mobile."
+  fi
 elif [ "$IN_PLATFORM" = "ios" ]; then
   # `ios_p12_password` n'est PAS exige : un .p12 sans mot de passe est legitime.
   require ios_p12 ios_profile asc_api_key asc_key_id asc_issuer_id

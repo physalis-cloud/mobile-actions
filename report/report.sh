@@ -12,6 +12,11 @@ set -uo pipefail
 . "$GITHUB_ACTION_PATH/../lib/common.sh"
 
 cleanup() {
+  # Keychain de la signature automatique (credentials/import-keychain.sh) :
+  # le retirer AVANT d'effacer son dossier, sinon il reste dans la search list.
+  if [ -n "${PHYSALIS_KEYCHAIN:-}" ] && command -v security >/dev/null 2>&1; then
+    security delete-keychain "$PHYSALIS_KEYCHAIN" 2>/dev/null || true
+  fi
   [ -n "${PHYSALIS_CRED_DIR:-}" ] && rm -rf "$PHYSALIS_CRED_DIR"
   # shellcheck disable=SC2086 # liste de chemins separes par des espaces
   [ -n "${PHYSALIS_CLEANUP_FILES:-}" ] && rm -f $PHYSALIS_CLEANUP_FILES
